@@ -4,23 +4,39 @@ import numpy as np
 
 print("Backend file loaded successfully")
 
+# ------------------------
+# APP SETUP
+# ------------------------
 app = FastAPI()
 
+# ------------------------
+# DATA STORAGE (Stage 1)
+# ------------------------
+manual_prices = []
+
+# ------------------------
+# STATIC DATA
+# ------------------------
 yards = [
     {"name": "Langley Recycling", "lat": 34.5, "lng": -78.8, "base_price": 2.50},
     {"name": "Metro Scrap", "lat": 34.3, "lng": -78.7, "base_price": 2.30},
 ]
 
-manual_prices = []
-
+# ------------------------
+# LIVE DATA FUNCTION
+# ------------------------
 def get_copper_series():
     copper = yf.Ticker("HG=F")
     data = copper.history(period="7d")["Close"]
     return list(data)
 
+# ------------------------
+# SIMPLE TREND LOGIC
+# ------------------------
 def predict_prices(prices):
     x = np.arange(len(prices))
     y = np.array(prices)
+
     coeffs = np.polyfit(x, y, 1)
     trend = coeffs[0]
 
@@ -30,64 +46,43 @@ def predict_prices(prices):
 
     return future, trend
 
-@app.get("/market")
-def market():
-    series = get_copper_series()
-    future, trend = predict_prices(series)
+# ------------------------
+# ROUTES
+# ------------------------
 
-    return {
-        "current": series[-1],
-        "forecast": future,
-        "trend": trend
-    }
+# Home
+@app.get("/")
+def home():
+    return {"status": "scrapradar is live 🚀"}
 
+# Add manual price (Stage 1 core)
 @app.post("/add-price")
 def add_price(data: dict):
     manual_prices.append(data)
     return {"status": "saved"}
 
+# Market data (combined)
+@app.get("/market")
+def market():
+    return {
+        "live_copper": get_copper_series(),
+        "manual_entries": manual_prices
+    }
+
+# Yards
 @app.get("/yards")
 def get_yards():
-    series = get_copper_series()
-    current = series[-1]
+    return yards
 
-    enriched = []
-
-    for y in yards:
-        adjusted = y["base_price"] * (current / 4.0)
-
-        override = next(
-            (m for m in manual_prices if m["name"] == y["name"]),
-            None
-        )
-
-        if override:
-            adjusted = override["price"]
-
-        enriched.append({
-            "name": y["name"],
-            "lat": y["lat"],
-            "lng": y["lng"],
-            "price": round(adjusted, 2),
-            "profit": int(adjusted * 800),
-            "manual": override is not None
-        })
-
-    return enriched
-
+# Decision logic
 @app.get("/decision")
 def decision():
-    series = get_copper_series()
-    future, trend = predict_prices(series)
+    if not manual_prices:
+        return {"decision": "No data yet"}
 
-    yard_list = get_yards()
-    best = max(yard_list, key=lambda x: x["profit"])
+    latest = manual_prices[-1]
 
-    action = "WAIT" if trend > 0 else "GO SELL"
-
-    return {
-        "action": action,
-        "yard": best["name"],
-        "profit": best["profit"],
-        "forecast": future
-    }
+    if latest.get("price", 0) > 4:
+        return {"decision": "SELL NOW"}
+    else:
+        return {"decision": "HOLD"}
