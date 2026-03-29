@@ -64,10 +64,16 @@ def add_price(data: dict):
 # Market data (combined)
 @app.get("/market")
 def market():
+    copper_prices = get_copper_series()
+    future, trend = predict_prices(copper_prices)
+
     return {
-        "live_copper": get_copper_series(),
+        "current": copper_prices[-1],
+        "forecast": future,
+        "trend": trend,
         "manual_entries": manual_prices
     }
+
 
 # Yards
 @app.get("/yards")
