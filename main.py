@@ -8,7 +8,7 @@ print("Backend file loaded successfully")
 # APP SETUP
 # ------------------------
 app = FastAPI()
-
+init_db()
 # ------------------------
 # DATA STORAGE (Stage 1)
 # ------------------------
