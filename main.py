@@ -14,6 +14,21 @@ app = FastAPI()
 # ------------------------
 manual_prices = []
 
+DB_NAME = "scrapradar.db"
+
+def init_db():
+    with closing(sqlite3.connect(DB_NAME)) as conn:
+        with conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS prices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    metal TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    yard TEXT NOT NULL
+                )
+            """)
+
+init_db()
 # ------------------------
 # STATIC DATA
 # ------------------------
