@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 import yfinance as yf
 import numpy as np
+import sqlite3
+from contextlib import closing
 
 print("Backend file loaded successfully")
 
