@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 import time
 import yfinance as yf
 
+from scrap_grades import estimate_copper_grades
+
 app = FastAPI(title="Scrap Radar Market API")
 
 app.add_middleware(
@@ -64,7 +66,6 @@ def _market_intelligence(prices):
     else:
         trend = "SIDEWAYS"
 
-    # Conservative decision support, not a guarantee or trading instruction.
     if trend == "RISING" and position < 0.90:
         signal = "HOLD / WATCH"
         note = "Momentum is positive and the market is not yet at the top of its recent range. Watch for continued strength or a reversal."
@@ -121,6 +122,11 @@ def _build_prices_payload():
             "intelligence": intelligence,
         }
 
+    copper_price = metals.get("copper", {}).get("price")
+    scrap_grades = {
+        "copper": estimate_copper_grades(copper_price),
+    }
+
     return {
         "status": "live" if available else "unavailable",
         "source": "Yahoo Finance futures/reference market data",
@@ -129,7 +135,8 @@ def _build_prices_payload():
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "available_metals": available,
         "metals": metals,
-        "note": "Market reference prices are not scrap-yard payout prices. Trend and sell/hold signals are decision-support estimates, not guarantees.",
+        "scrap_grades": scrap_grades,
+        "note": "Market reference prices are not scrap-yard payout prices. Scrap-grade values are configurable estimates until calibrated with real local yard quotes. Trend and sell/hold signals are decision-support estimates, not guarantees.",
     }
 
 
@@ -157,6 +164,7 @@ def market():
     return {
         "current": round(prices[-1], 4),
         "intelligence": _market_intelligence(prices),
+        "scrap_grades": estimate_copper_grades(prices[-1]),
     }
 
 
@@ -168,7 +176,7 @@ def home():
 <head><title>ScrapRadar Market API</title><meta name="viewport" content="width=device-width, initial-scale=1" /></head>
 <body style="font-family:Arial;padding:20px;background:#111;color:#0f0;">
 <h1>📡 Scrap Radar Market API</h1>
-<p>Central market pricing, trend and sell-window intelligence for Scrap Radar Family.</p>
+<p>Central market pricing, trend, sell-window and scrap-grade intelligence for Scrap Radar Family.</p>
 <p><a href="/prices" style="color:#00d4ff;">Open /prices JSON</a></p>
 <pre id="output" style="background:#000;padding:12px;color:#0f0;">Loading prices...</pre>
 <script>
