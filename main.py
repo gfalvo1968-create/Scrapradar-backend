@@ -15,8 +15,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Yahoo Finance futures/reference symbols.
-# These are market reference prices, not scrap-yard payout prices.
 MARKET_SYMBOLS = {
     "gold": {"ticker": "GC=F", "unit": "troy_oz", "symbol": "XAU"},
     "silver": {"ticker": "SI=F", "unit": "troy_oz", "symbol": "XAG"},
@@ -29,15 +27,70 @@ PRICE_CACHE_TTL_SECONDS = 60
 _price_cache = {"timestamp": 0.0, "payload": None}
 
 
-def _latest_close(ticker_symbol):
-    ticker = yf.Ticker(ticker_symbol)
-    data = ticker.history(period="5d", interval="1d")
+def _history(ticker_symbol, period="1mo"):
+    data = yf.Ticker(ticker_symbol).history(period=period, interval="1d")
     if data.empty or "Close" not in data:
-        return None
-    prices = data["Close"].dropna().tolist()
-    if not prices:
-        return None
-    return round(float(prices[-1]), 4)
+        return []
+    return [float(p) for p in data["Close"].dropna().tolist()]
+
+
+def _market_intelligence(prices):
+    if len(prices) < 5:
+        return {
+            "trend": "UNKNOWN",
+            "signal": "WAIT FOR DATA",
+            "confidence": 0,
+            "change_5d_pct": None,
+            "change_20d_pct": None,
+            "position_20d": None,
+            "forecast_note": "Not enough market history for a useful trend signal.",
+        }
+
+    current = prices[-1]
+    five_start = prices[-5]
+    twenty_window = prices[-20:] if len(prices) >= 20 else prices
+    twenty_start = twenty_window[0]
+    low20 = min(twenty_window)
+    high20 = max(twenty_window)
+
+    change5 = ((current - five_start) / five_start) * 100 if five_start else 0
+    change20 = ((current - twenty_start) / twenty_start) * 100 if twenty_start else 0
+    position = ((current - low20) / (high20 - low20)) if high20 > low20 else 0.5
+
+    if change5 > 1.0 and change20 > 1.5:
+        trend = "RISING"
+    elif change5 < -1.0 and change20 < -1.5:
+        trend = "FALLING"
+    else:
+        trend = "SIDEWAYS"
+
+    # Conservative decision support, not a guarantee or trading instruction.
+    if trend == "RISING" and position < 0.90:
+        signal = "HOLD / WATCH"
+        note = "Momentum is positive and the market is not yet at the top of its recent range. Watch for continued strength or a reversal."
+    elif position >= 0.90 and change5 <= 0.5:
+        signal = "FAVORABLE SELL WINDOW"
+        note = "Price is near the top of its recent range while short-term momentum is flattening or weakening."
+    elif trend == "FALLING":
+        signal = "SELL / PROTECT VALUE"
+        note = "Recent momentum is negative. Selling sooner may reduce exposure to further weakness."
+    else:
+        signal = "WATCH"
+        note = "The market does not show a strong directional edge right now."
+
+    strength = min(abs(change5) * 8 + abs(change20) * 3, 45)
+    range_certainty = abs(position - 0.5) * 30
+    confidence = int(max(35, min(85, 40 + strength + range_certainty)))
+
+    return {
+        "trend": trend,
+        "signal": signal,
+        "confidence": confidence,
+        "change_5d_pct": round(change5, 2),
+        "change_20d_pct": round(change20, 2),
+        "position_20d": round(position, 3),
+        "forecast_note": note,
+    }
 
 
 def _build_prices_payload():
@@ -46,10 +99,13 @@ def _build_prices_payload():
 
     for name, config in MARKET_SYMBOLS.items():
         try:
-            price = _latest_close(config["ticker"])
+            history = _history(config["ticker"], "1mo")
+            price = round(history[-1], 4) if history else None
+            intelligence = _market_intelligence(history)
         except Exception as exc:
             print(f"[Price Feed Error] {name}: {exc}")
             price = None
+            intelligence = _market_intelligence([])
 
         is_available = price is not None
         if is_available:
@@ -62,6 +118,7 @@ def _build_prices_payload():
             "currency": "USD",
             "unit": config["unit"],
             "available": is_available,
+            "intelligence": intelligence,
         }
 
     return {
@@ -72,18 +129,14 @@ def _build_prices_payload():
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "available_metals": available,
         "metals": metals,
-        "note": "Market reference prices are not scrap-yard payout prices.",
+        "note": "Market reference prices are not scrap-yard payout prices. Trend and sell/hold signals are decision-support estimates, not guarantees.",
     }
 
 
 @app.get("/prices")
 def prices():
     now = time.time()
-
-    if (
-        _price_cache["payload"] is not None
-        and now - _price_cache["timestamp"] < PRICE_CACHE_TTL_SECONDS
-    ):
+    if _price_cache["payload"] is not None and now - _price_cache["timestamp"] < PRICE_CACHE_TTL_SECONDS:
         payload = dict(_price_cache["payload"])
         payload["cache"] = "hit"
         return payload
@@ -91,56 +144,36 @@ def prices():
     payload = _build_prices_payload()
     _price_cache["timestamp"] = now
     _price_cache["payload"] = payload
-
     response = dict(payload)
     response["cache"] = "miss"
     return response
 
 
-# ---------------- EXISTING COPPER MARKET API ----------------
 @app.get("/market")
 def market():
-    ticker = yf.Ticker("HG=F")
-    data = ticker.history(period="5d")
-
-    prices = data["Close"].dropna().tolist()
-
-    if len(prices) < 3:
+    prices = _history("HG=F", "1mo")
+    if len(prices) < 5:
         return {"error": "Not enough data"}
-
-    current = round(float(prices[-1]), 3)
-    forecast = [round(float(p) * 1.01, 4) for p in prices[-3:]]
-    trend = round((float(prices[-1]) - float(prices[0])) / float(prices[0]), 3)
-
     return {
-        "current": current,
-        "forecast": forecast,
-        "trend": trend,
+        "current": round(prices[-1], 4),
+        "intelligence": _market_intelligence(prices),
     }
 
 
-# ---------------- DASHBOARD ----------------
 @app.get("/", response_class=HTMLResponse)
 def home():
     return """
 <!DOCTYPE html>
 <html>
-<head>
-    <title>ScrapRadar Market API</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-</head>
+<head><title>ScrapRadar Market API</title><meta name="viewport" content="width=device-width, initial-scale=1" /></head>
 <body style="font-family:Arial;padding:20px;background:#111;color:#0f0;">
-    <h1>📡 Scrap Radar Market API</h1>
-    <p>Central live/reference pricing service for Scrap Radar Family.</p>
-    <p><a href="/prices" style="color:#00d4ff;">Open /prices JSON</a></p>
-    <p><a href="/market" style="color:#00d4ff;">Open legacy copper /market JSON</a></p>
-    <pre id="output" style="background:#000;padding:12px;color:#0f0;">Loading prices...</pre>
-    <script>
-    fetch('/prices?nocache=' + Date.now())
-      .then(r => r.json())
-      .then(data => document.getElementById('output').innerText = JSON.stringify(data, null, 2))
-      .catch(() => document.getElementById('output').innerText = 'Error loading prices');
-    </script>
+<h1>📡 Scrap Radar Market API</h1>
+<p>Central market pricing, trend and sell-window intelligence for Scrap Radar Family.</p>
+<p><a href="/prices" style="color:#00d4ff;">Open /prices JSON</a></p>
+<pre id="output" style="background:#000;padding:12px;color:#0f0;">Loading prices...</pre>
+<script>
+fetch('/prices?nocache=' + Date.now()).then(r=>r.json()).then(data=>document.getElementById('output').innerText=JSON.stringify(data,null,2)).catch(()=>document.getElementById('output').innerText='Error loading prices');
+</script>
 </body>
 </html>
 """
