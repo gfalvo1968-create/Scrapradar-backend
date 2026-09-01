@@ -6,6 +6,7 @@ import time
 import yfinance as yf
 
 from scrap_grades import estimate_copper_grades
+from material_catalog import build_material_pricing
 
 app = FastAPI(title="Scrap Radar Market API")
 
@@ -21,6 +22,7 @@ MARKET_SYMBOLS = {
     "gold": {"ticker": "GC=F", "unit": "troy_oz", "symbol": "XAU"},
     "silver": {"ticker": "SI=F", "unit": "troy_oz", "symbol": "XAG"},
     "copper": {"ticker": "HG=F", "unit": "lb", "symbol": "XCU"},
+    "aluminum": {"ticker": "ALI=F", "unit": "metric_ton", "symbol": "AL"},
     "platinum": {"ticker": "PL=F", "unit": "troy_oz", "symbol": "XPT"},
     "palladium": {"ticker": "PA=F", "unit": "troy_oz", "symbol": "XPD"},
 }
@@ -126,6 +128,7 @@ def _build_prices_payload():
     scrap_grades = {
         "copper": estimate_copper_grades(copper_price),
     }
+    materials = build_material_pricing(metals)
 
     return {
         "status": "live" if available else "unavailable",
@@ -136,7 +139,8 @@ def _build_prices_payload():
         "available_metals": available,
         "metals": metals,
         "scrap_grades": scrap_grades,
-        "note": "Market reference prices are not scrap-yard payout prices. Scrap-grade values are configurable estimates until calibrated with real local yard quotes. Trend and sell/hold signals are decision-support estimates, not guarantees.",
+        "materials": materials,
+        "note": "Market reference prices are not scrap-yard payout prices. Copper grade values are transparent benchmark-derived estimates. Aluminum grades show live benchmark context but require a local yard quote. Other scrap grades remain local-quote items until a verified buyer/refiner price is supplied. Trend and sell/hold signals are decision-support estimates, not guarantees.",
     }
 
 
@@ -156,15 +160,28 @@ def prices():
     return response
 
 
+@app.get("/materials")
+def materials():
+    payload = prices()
+    return {
+        "status": payload.get("status"),
+        "currency": payload.get("currency", "USD"),
+        "updated_at": payload.get("updated_at"),
+        "source": payload.get("source"),
+        "categories": payload.get("materials", []),
+        "note": payload.get("note"),
+    }
+
+
 @app.get("/market")
 def market():
-    prices = _history("HG=F", "1mo")
-    if len(prices) < 5:
+    copper_prices = _history("HG=F", "1mo")
+    if len(copper_prices) < 5:
         return {"error": "Not enough data"}
     return {
-        "current": round(prices[-1], 4),
-        "intelligence": _market_intelligence(prices),
-        "scrap_grades": estimate_copper_grades(prices[-1]),
+        "current": round(copper_prices[-1], 4),
+        "intelligence": _market_intelligence(copper_prices),
+        "scrap_grades": estimate_copper_grades(copper_prices[-1]),
     }
 
 
@@ -176,8 +193,9 @@ def home():
 <head><title>ScrapRadar Market API</title><meta name="viewport" content="width=device-width, initial-scale=1" /></head>
 <body style="font-family:Arial;padding:20px;background:#111;color:#0f0;">
 <h1>📡 Scrap Radar Market API</h1>
-<p>Central market pricing, trend, sell-window and scrap-grade intelligence for Scrap Radar Family.</p>
+<p>Central market pricing, trend, material catalog, sell-window and scrap-grade intelligence for Scrap Radar Family.</p>
 <p><a href="/prices" style="color:#00d4ff;">Open /prices JSON</a></p>
+<p><a href="/materials" style="color:#00d4ff;">Open /materials JSON</a></p>
 <pre id="output" style="background:#000;padding:12px;color:#0f0;">Loading prices...</pre>
 <script>
 fetch('/prices?nocache=' + Date.now()).then(r=>r.json()).then(data=>document.getElementById('output').innerText=JSON.stringify(data,null,2)).catch(()=>document.getElementById('output').innerText='Error loading prices');
