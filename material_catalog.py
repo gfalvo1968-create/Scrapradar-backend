@@ -141,6 +141,8 @@ def build_material_pricing(metals):
                 benchmark_price, benchmark_unit = _benchmark_value(reference, metals)
                 row["benchmark_price"] = benchmark_price
                 row["benchmark_unit"] = benchmark_unit
+                row["source_price_date"] = metals.get(reference, {}).get("source_price_date")
+                row["stale"] = bool(metals.get(reference, {}).get("stale"))
 
             if row["pricing_mode"] == "market_reference":
                 row["price"] = benchmark_price

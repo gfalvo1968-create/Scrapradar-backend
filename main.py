@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from math import isfinite
 import time
 import yfinance as yf
 
@@ -28,14 +29,32 @@ MARKET_SYMBOLS = {
 }
 
 PRICE_CACHE_TTL_SECONDS = 60
+# Daily market bars can pause over weekends and holidays. Older values remain
+# visible for context, but must not be presented as current quotes.
+MAX_PRICE_AGE_DAYS = 5
 _price_cache = {"timestamp": 0.0, "payload": None}
 
 
-def _history(ticker_symbol, period="1mo"):
+def _history_with_price_date(ticker_symbol, period="1mo"):
     data = yf.Ticker(ticker_symbol).history(period=period, interval="1d")
     if data.empty or "Close" not in data:
-        return []
-    return [float(p) for p in data["Close"].dropna().tolist()]
+        return [], None
+    closes = data["Close"].dropna()
+    valid = []
+    for bar_date, raw_price in closes.items():
+        try:
+            price = float(raw_price)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if isfinite(price) and price > 0:
+            valid.append((bar_date, price))
+    if not valid:
+        return [], None
+    prices = [price for _, price in valid]
+    # A daily bar provides a market date, not a trustworthy update time.
+    last_date = valid[-1][0]
+    price_date = last_date.date() if isinstance(last_date, datetime) else last_date
+    return prices, price_date if isinstance(price_date, date) else None
 
 
 def _market_intelligence(prices):
@@ -96,23 +115,36 @@ def _market_intelligence(prices):
     }
 
 
-def _build_prices_payload():
+def _build_prices_payload(checked_at=None):
     metals = {}
     available = 0
+    current = 0
+    checked_at = checked_at or datetime.now(timezone.utc)
 
     for name, config in MARKET_SYMBOLS.items():
         try:
-            history = _history(config["ticker"], "1mo")
+            history, price_date = _history_with_price_date(config["ticker"], "1mo")
             price = round(history[-1], 4) if history else None
             intelligence = _market_intelligence(history)
         except Exception as exc:
             print(f"[Price Feed Error] {name}: {exc}")
             price = None
+            price_date = None
             intelligence = _market_intelligence([])
 
         is_available = price is not None
+        is_stale = is_available and (
+            price_date is None or (checked_at.date() - price_date).days > MAX_PRICE_AGE_DAYS
+            or price_date > checked_at.date()
+        )
+        if is_stale:
+            intelligence = _market_intelligence([])
+            intelligence["signal"] = "STALE MARKET DATA"
+            intelligence["forecast_note"] = "Market date is too old or unknown; refresh the source before using a trend signal."
         if is_available:
             available += 1
+            if not is_stale:
+                current += 1
 
         metals[name] = {
             "symbol": config["symbol"],
@@ -121,6 +153,8 @@ def _build_prices_payload():
             "currency": "USD",
             "unit": config["unit"],
             "available": is_available,
+            "source_price_date": price_date.isoformat() if price_date else None,
+            "stale": is_stale,
             "intelligence": intelligence,
         }
 
@@ -131,11 +165,12 @@ def _build_prices_payload():
     materials = build_material_pricing(metals)
 
     return {
-        "status": "live" if available else "unavailable",
+        "status": "live" if current else "stale" if available else "unavailable",
         "source": "Yahoo Finance futures/reference market data",
         "price_type": "market_reference",
         "currency": "USD",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": checked_at.isoformat(),
+        "checked_at": checked_at.isoformat(),
         "available_metals": available,
         "metals": metals,
         "scrap_grades": scrap_grades,
@@ -175,13 +210,15 @@ def materials():
 
 @app.get("/market")
 def market():
-    copper_prices = _history("HG=F", "1mo")
-    if len(copper_prices) < 5:
+    copper = prices()["metals"]["copper"]
+    if not copper["available"]:
         return {"error": "Not enough data"}
     return {
-        "current": round(copper_prices[-1], 4),
-        "intelligence": _market_intelligence(copper_prices),
-        "scrap_grades": estimate_copper_grades(copper_prices[-1]),
+        "current": copper["price"],
+        "intelligence": copper["intelligence"],
+        "scrap_grades": estimate_copper_grades(copper["price"]),
+        "source_price_date": copper["source_price_date"],
+        "stale": copper["stale"],
     }
 
 
