@@ -8,6 +8,7 @@ import yfinance as yf
 
 from scrap_grades import estimate_copper_grades
 from material_catalog import build_material_pricing
+from operating_profiles import build_profile_router
 
 app = FastAPI(title="Scrap Radar Market API")
 
@@ -15,7 +16,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -206,6 +207,9 @@ def materials():
         "categories": payload.get("materials", []),
         "note": payload.get("note"),
     }
+
+
+app.include_router(build_profile_router(prices))
 
 
 @app.get("/market")
