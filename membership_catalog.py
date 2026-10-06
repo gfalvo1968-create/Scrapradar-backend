@@ -18,7 +18,12 @@ def catalog():
         "version": CATALOG_VERSION, "currency": "USD", "interval": "MONTH",
         "checkout_enabled": False,
         "availability": "prelaunch",
-        "usage_allowances": {"status": "pending", "unlimited": False},
+        "usage_allowances": {"status": "approved", "unlimited": False,
+                             "paid_board_cases_per_day": 25,
+                             "applies_to": ["board_sense", "family"],
+                             "counting_unit": "One physical board case, not each photo",
+                             "enforcement": "pending_authenticated_customer_integration",
+                             "daily_reset_policy": "pending"},
         "plans": [{"id": key, **deepcopy(value)} for key, value in PLANS.items()],
         "family_rate_policy": {
             "rate_retained_while_subscription_active": True,

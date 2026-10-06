@@ -22,6 +22,9 @@ class MembershipTests(unittest.TestCase):
         result=TestClient(app).get('/api/membership-plans').json()
         self.assertEqual([p['amount_cents'] for p in result['plans']], [1995,2995,4495])
         self.assertFalse(result['checkout_enabled'])
+        self.assertEqual(result['usage_allowances']['paid_board_cases_per_day'],25)
+        self.assertEqual(result['usage_allowances']['applies_to'],['board_sense','family'])
+        self.assertIn('pending',result['usage_allowances']['enforcement'])
         result['plans'][0]['modules'].append('fake')
         self.assertNotIn('fake',catalog()['plans'][0]['modules'])
 
