@@ -4,6 +4,7 @@ from fastapi.responses import HTMLResponse
 from datetime import date, datetime, timezone
 from math import isfinite
 import time
+from threading import Lock
 import yfinance as yf
 
 from scrap_grades import estimate_copper_grades
@@ -34,6 +35,7 @@ PRICE_CACHE_TTL_SECONDS = 60
 # visible for context, but must not be presented as current quotes.
 MAX_PRICE_AGE_DAYS = 5
 _price_cache = {"timestamp": 0.0, "payload": None}
+_price_cache_lock = Lock()
 
 
 def _history_with_price_date(ticker_symbol, period="1mo"):
@@ -182,15 +184,23 @@ def _build_prices_payload(checked_at=None):
 
 @app.get("/prices")
 def prices():
-    now = time.time()
+    now = time.monotonic()
     if _price_cache["payload"] is not None and now - _price_cache["timestamp"] < PRICE_CACHE_TTL_SECONDS:
         payload = dict(_price_cache["payload"])
         payload["cache"] = "hit"
         return payload
 
-    payload = _build_prices_payload()
-    _price_cache["timestamp"] = now
-    _price_cache["payload"] = payload
+    # All public consumers share one refresh. Concurrent misses must not
+    # multiply the six upstream market requests.
+    with _price_cache_lock:
+        now = time.monotonic()
+        if _price_cache["payload"] is not None and now - _price_cache["timestamp"] < PRICE_CACHE_TTL_SECONDS:
+            payload = dict(_price_cache["payload"])
+            payload["cache"] = "hit"
+            return payload
+        payload = _build_prices_payload()
+        _price_cache["timestamp"] = time.monotonic()
+        _price_cache["payload"] = payload
     response = dict(payload)
     response["cache"] = "miss"
     return response
@@ -210,6 +220,12 @@ def materials():
 
 
 app.include_router(build_profile_router(prices))
+
+
+@app.get("/health")
+def health():
+    """Cheap deployment probe; does not fetch prices or reveal private profiles."""
+    return {"status": "ok", "service": "Scrap Radar Market API", "release": "launch-20261006"}
 
 
 @app.get("/market")
