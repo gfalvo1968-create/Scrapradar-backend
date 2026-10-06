@@ -35,4 +35,4 @@ class CacheTests(unittest.TestCase):
 
     def test_health_check_does_not_refresh_market(self):
         with patch.object(main, "_build_prices_payload", side_effect=AssertionError("upstream call")):
-            self.assertEqual(main.health()["release"], "launch-20261006")
+            self.assertEqual(main.health()["release"], "launch-20261006-memberships")
