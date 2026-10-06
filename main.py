@@ -11,9 +11,11 @@ from scrap_grades import estimate_copper_grades
 from material_catalog import build_material_pricing
 from operating_profiles import build_profile_router
 from membership_catalog import router as membership_router
+from customer_accounts import router as customer_router
 
 app = FastAPI(title="Scrap Radar Market API")
 app.include_router(membership_router)
+app.include_router(customer_router)
 
 app.add_middleware(
     CORSMiddleware,
