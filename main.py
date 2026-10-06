@@ -10,8 +10,10 @@ import yfinance as yf
 from scrap_grades import estimate_copper_grades
 from material_catalog import build_material_pricing
 from operating_profiles import build_profile_router
+from membership_catalog import router as membership_router
 
 app = FastAPI(title="Scrap Radar Market API")
+app.include_router(membership_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -225,7 +227,7 @@ app.include_router(build_profile_router(prices))
 @app.get("/health")
 def health():
     """Cheap deployment probe; does not fetch prices or reveal private profiles."""
-    return {"status": "ok", "service": "Scrap Radar Market API", "release": "launch-20261006"}
+    return {"status": "ok", "service": "Scrap Radar Market API", "release": "launch-20261006-memberships"}
 
 
 @app.get("/market")
