@@ -1,4 +1,5 @@
 """Owner-only sandbox pilot. Separate records; never grants production access."""
+import hashlib
 import base64
 import json
 import os
@@ -11,7 +12,8 @@ from urllib.parse import urlsplit
 from urllib.request import Request, build_opener
 from urllib.error import HTTPError, URLError
 from uuid import uuid4, uuid5, NAMESPACE_URL
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Request as WebRequest
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict
 from customer_accounts import verified_customer
 from database import _connect
@@ -72,7 +74,10 @@ def connect():
         id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, plan TEXT NOT NULL,
         created REAL NOT NULL, provider_plan TEXT NOT NULL,
         subscription TEXT, approval TEXT, state TEXT NOT NULL DEFAULT 'CREATING',
-        UNIQUE(customer_id,plan));''')
+        UNIQUE(customer_id,plan));
+        CREATE TABLE IF NOT EXISTS paypal_pilot_events (
+        id TEXT PRIMARY KEY, digest TEXT NOT NULL, subscription TEXT,
+        received REAL NOT NULL, outcome TEXT NOT NULL);''')
     return c
 
 
@@ -195,16 +200,8 @@ def reconcile(intent:str,response:Response,customer=Depends(pilot)):
                 (intent,customer['id'])).fetchone()
             if not row or not row['subscription']:
                 raise HTTPException(404,'Test subscription not found')
-            data=api('/v1/billing/subscriptions/'+row['subscription'])
-            if (data.get('id')!=row['subscription'] or data.get('plan_id')!=row['provider_plan']
-                or data.get('custom_id')!=row['id'] or data.get('plan_overridden',False)
-                or data.get('quantity','1')!='1'):
-                raise HTTPException(409,'PayPal subscription details did not match this test')
-            validate_plan(api('/v1/billing/plans/'+row['provider_plan']),row['plan'])
-            state=data.get('status')
-            if state not in ('APPROVAL_PENDING','APPROVED','ACTIVE','SUSPENDED','CANCELLED','EXPIRED'):
-                raise HTTPException(502,'Unknown PayPal subscription state')
-            c.execute('UPDATE paypal_pilot_intents SET state=? WHERE id=?',(state,intent)); c.commit()
+            data,state=refresh_subscription(c,row)
+            c.commit()
             payment=data.get('billing_info',{}).get('last_payment',{}).get('amount',{})
             return {'plan':row['plan'],'subscription_id':row['subscription'],'state':state,
                 'amount_cents':PLANS[row['plan']]['amount_cents'],'currency':'USD',
@@ -213,3 +210,92 @@ def reconcile(intent:str,response:Response,customer=Depends(pilot)):
                 'environment':'sandbox','paid_access_enabled':False}
     except (sqlite3.Error,RuntimeError,OSError):
         raise HTTPException(503,'Test records are temporarily unavailable') from None
+
+
+def refresh_subscription(c, row):
+    """Caller holds a write transaction, serializing provider reads and writes."""
+    data=api('/v1/billing/subscriptions/'+row['subscription'])
+    if (data.get('id')!=row['subscription'] or data.get('plan_id')!=row['provider_plan']
+        or data.get('custom_id')!=row['id'] or data.get('plan_overridden',False)
+        or data.get('quantity','1')!='1'):
+        raise HTTPException(409,'PayPal subscription details did not match this test')
+    validate_plan(api('/v1/billing/plans/'+row['provider_plan']),row['plan'])
+    state=data.get('status')
+    if state not in ('APPROVAL_PENDING','APPROVED','ACTIVE','SUSPENDED','CANCELLED','EXPIRED'):
+        raise HTTPException(502,'Unknown PayPal subscription state')
+    c.execute('UPDATE paypal_pilot_intents SET state=? WHERE id=?',(state,row['id']))
+    return data,state
+
+
+WEBHOOK_EVENTS = frozenset({
+    'BILLING.SUBSCRIPTION.CREATED', 'BILLING.SUBSCRIPTION.ACTIVATED',
+    'BILLING.SUBSCRIPTION.UPDATED', 'BILLING.SUBSCRIPTION.SUSPENDED',
+    'BILLING.SUBSCRIPTION.CANCELLED', 'BILLING.SUBSCRIPTION.EXPIRED',
+    'BILLING.SUBSCRIPTION.PAYMENT.FAILED', 'PAYMENT.SALE.COMPLETED',
+    'PAYMENT.SALE.REFUNDED', 'PAYMENT.SALE.REVERSED'})
+
+
+def process_webhook(raw, headers):
+    if os.environ.get('PAYPAL_ENVIRONMENT') != 'sandbox':
+        raise HTTPException(503,'Sandbox mode is required')
+    webhook_id=os.environ.get('PAYPAL_SANDBOX_WEBHOOK_ID','')
+    if not re.fullmatch(r'[A-Z0-9-]{5,80}',webhook_id):
+        raise HTTPException(503,'Sandbox webhook is not configured')
+    try:
+        event=json.loads(raw)
+        if not isinstance(event,dict): raise ValueError()
+        event_id=event.get('id','')
+        if not isinstance(event_id,str) or not re.fullmatch(r'[A-Za-z0-9-]{5,100}',event_id): raise ValueError()
+    except (ValueError,TypeError):
+        raise HTTPException(400,'Invalid webhook message') from None
+    fields={key:headers.get('paypal-'+key.replace('_','-'),'') for key in
+        ('transmission_id','transmission_time','cert_url','auth_algo','transmission_sig')}
+    if any(not value or len(value)>4096 for value in fields.values()):
+        raise HTTPException(400,'Missing or invalid webhook verification headers')
+    cert=urlsplit(fields['cert_url'])
+    if (cert.scheme!='https' or cert.netloc not in ('api.sandbox.paypal.com','api-m.sandbox.paypal.com')
+        or not cert.path.startswith('/v1/notifications/certs/') or cert.query or cert.fragment):
+        raise HTTPException(400,'Invalid webhook certificate address')
+    # PayPal verifies against the configured app webhook ID. Never fetch a caller URL.
+    result=api('/v1/notifications/verify-webhook-signature',dict(fields,
+        webhook_id=webhook_id,webhook_event=event))
+    if result.get('verification_status')!='SUCCESS':
+        raise HTTPException(403,'Webhook verification failed')
+    digest=hashlib.sha256(json.dumps(event,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    kind=event.get('event_type')
+    if not isinstance(kind,str): raise HTTPException(400,'Invalid webhook event type')
+    resource=event.get('resource',{})
+    subscription=None
+    if kind in WEBHOOK_EVENTS and isinstance(resource,dict):
+        subscription=resource.get('id') if kind.startswith('BILLING.SUBSCRIPTION.') else resource.get('billing_agreement_id')
+    if subscription is not None and (not isinstance(subscription,str) or not re.fullmatch(r'I-[A-Z0-9-]{5,80}',subscription)):
+        raise HTTPException(400,'Invalid subscription identifier')
+    try:
+        with closing(connect()) as c:
+            c.execute('BEGIN IMMEDIATE')
+            prior=c.execute('SELECT digest FROM paypal_pilot_events WHERE id=?',(event_id,)).fetchone()
+            if prior:
+                if prior['digest']!=digest: raise HTTPException(409,'Webhook event ID collision')
+                return {'received':True,'duplicate':True,'paid_access_enabled':False}
+            row=c.execute('SELECT * FROM paypal_pilot_intents WHERE subscription=?',(subscription,)).fetchone() if subscription else None
+            outcome='ignored'
+            if row:
+                # Use canonical current state, not an old or out-of-order event status.
+                refresh_subscription(c,row)
+                outcome='reconciled'
+            c.execute('INSERT INTO paypal_pilot_events VALUES (?,?,?,?,?)',
+                (event_id,digest,subscription,time.time(),outcome))
+            c.commit()
+            return {'received':True,'outcome':outcome,'paid_access_enabled':False}
+    except (sqlite3.Error,RuntimeError,OSError):
+        raise HTTPException(503,'Test records are temporarily unavailable') from None
+
+
+@router.post('/webhook')
+async def webhook(request:WebRequest, response:Response):
+    response.headers['Cache-Control']='no-store'
+    raw=bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw)>262144: raise HTTPException(413,'Webhook message is too large')
+    return await run_in_threadpool(process_webhook,bytes(raw),request.headers)
