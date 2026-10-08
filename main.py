@@ -13,11 +13,13 @@ from operating_profiles import build_profile_router
 from membership_catalog import router as membership_router
 from customer_accounts import router as customer_router
 from paypal_sandbox import router as paypal_router
+from paypal_checkout import router as paypal_checkout_router
 
 app = FastAPI(title="Scrap Radar Market API")
 app.include_router(membership_router)
 app.include_router(customer_router)
 app.include_router(paypal_router)
+app.include_router(paypal_checkout_router)
 
 app.add_middleware(
     CORSMiddleware,
