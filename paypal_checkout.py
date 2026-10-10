@@ -78,7 +78,25 @@ def connect():
         CREATE TABLE IF NOT EXISTS paypal_pilot_events (
         id TEXT PRIMARY KEY, digest TEXT NOT NULL, subscription TEXT,
         received REAL NOT NULL, outcome TEXT NOT NULL);''')
-    return c
+    # Remove the original one-attempt constraint atomically, preserving every ID.
+    try:
+        c.execute('BEGIN IMMEDIATE')
+        schema=c.execute("SELECT sql FROM sqlite_master WHERE name='paypal_pilot_intents'").fetchone()[0]
+        if 'UNIQUE(customer_id,plan)' in schema:
+            c.execute("""CREATE TABLE paypal_pilot_intents_v2 (
+                id TEXT PRIMARY KEY, customer_id TEXT NOT NULL, plan TEXT NOT NULL,
+                created REAL NOT NULL, provider_plan TEXT NOT NULL,
+                subscription TEXT, approval TEXT, state TEXT NOT NULL DEFAULT 'CREATING')""")
+            c.execute('INSERT INTO paypal_pilot_intents_v2 SELECT * FROM paypal_pilot_intents')
+            c.execute('DROP TABLE paypal_pilot_intents')
+            c.execute('ALTER TABLE paypal_pilot_intents_v2 RENAME TO paypal_pilot_intents')
+        c.execute('CREATE INDEX IF NOT EXISTS paypal_pilot_latest ON paypal_pilot_intents(customer_id,plan,created DESC)')
+        c.commit()
+        return c
+    except Exception:
+        c.rollback()
+        c.close()
+        raise
 
 
 def provider_id(data, prefix):
@@ -160,8 +178,14 @@ def checkout(choice:Choice, response:Response, customer=Depends(pilot)):
             c.execute('BEGIN IMMEDIATE')
             provider_plan=ensure_plan(c,choice.plan)
             validate_plan(api('/v1/billing/plans/'+provider_plan),choice.plan)
-            row=c.execute('SELECT * FROM paypal_pilot_intents WHERE customer_id=? AND plan=?',
+            row=c.execute('SELECT * FROM paypal_pilot_intents WHERE customer_id=? AND plan=? ORDER BY created DESC, rowid DESC LIMIT 1',
                 (customer['id'],choice.plan)).fetchone()
+            # A new attempt is allowed only after a canonical terminal state.
+            # Active/pending/uncertain attempts retain their original request ID.
+            if row and row['subscription']:
+                _,state=refresh_subscription(c,row)
+                if state in ('CANCELLED','EXPIRED'):
+                    row=None
             if not row:
                 intent=str(uuid4())
                 c.execute('INSERT INTO paypal_pilot_intents(id,customer_id,plan,created,provider_plan) VALUES (?,?,?,?,?)',
@@ -169,7 +193,7 @@ def checkout(choice:Choice, response:Response, customer=Depends(pilot)):
             c.commit()
             # Persist the request ID before calling PayPal. Concurrent retries are serialized.
             c.execute('BEGIN IMMEDIATE')
-            row=c.execute('SELECT * FROM paypal_pilot_intents WHERE customer_id=? AND plan=?',
+            row=c.execute('SELECT * FROM paypal_pilot_intents WHERE customer_id=? AND plan=? ORDER BY created DESC, rowid DESC LIMIT 1',
                 (customer['id'],choice.plan)).fetchone()
             if not row['subscription']:
                 if time.time()-row['created']>86400:

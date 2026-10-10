@@ -48,3 +48,37 @@ class CheckoutTests(unittest.TestCase):
  def test_redirect_allowlist(self):
   for href in ['https://www.paypal.com/webapps/billing/subscriptions?x=1','https://www.sandbox.paypal.com.evil.test/webapps/billing/subscriptions?x=1']:
    with self.assertRaises(HTTPException):p.approval_url({'links':[{'rel':'approve','href':href}]})
+
+ def test_cancelled_retest_preserves_history_and_reuses_new_pending_attempt(self):
+  first=self.buy().json()['intent'];old=list(self.subs.values())[0]
+  old['status']='CANCELLED'
+  second=self.buy();self.assertEqual(second.status_code,200,second.text)
+  new=second.json()['intent'];self.assertNotEqual(first,new)
+  self.assertEqual(self.buy().json()['intent'],new);self.assertEqual(len(self.subs),2)
+  self.assertEqual(self.client.get('/api/paypal/pilot/intents/'+first).json()['state'],'CANCELLED')
+  with p.connect() as c:
+   self.assertEqual(c.execute('SELECT COUNT(*) FROM paypal_pilot_intents').fetchone()[0],2)
+ def test_stored_terminal_state_cannot_replace_canonical_active_subscription(self):
+  first=self.buy().json()['intent']
+  with p.connect() as c:c.execute("UPDATE paypal_pilot_intents SET state='CANCELLED'");c.commit()
+  self.assertEqual(self.buy().json()['intent'],first);self.assertEqual(len(self.subs),1)
+ def test_retest_provider_failure_keeps_original_attempt(self):
+  first=self.buy().json()['intent'];list(self.subs.values())[0]['status']='CANCELLED'
+  real=self.api
+  def fail(path,body=None,request_id=None):
+   if path.startswith('/v1/billing/subscriptions/'):raise HTTPException(502,'Retry')
+   return real(path,body,request_id)
+  with patch('paypal_checkout.api',side_effect=fail):self.assertEqual(self.buy().status_code,502)
+  with p.connect() as c:self.assertEqual(c.execute('SELECT COUNT(*) FROM paypal_pilot_intents').fetchone()[0],1)
+  self.assertEqual(len(self.subs),1)
+
+ def test_uncertain_retest_create_retries_same_durable_request_id(self):
+  self.buy();list(self.subs.values())[0]['status']='CANCELLED';real=self.api;request_ids=[]
+  def fail(path,body=None,request_id=None):
+   if path=='/v1/billing/subscriptions':request_ids.append(request_id);raise HTTPException(502,'Retry')
+   return real(path,body,request_id)
+  with patch('paypal_checkout.api',side_effect=fail):
+   self.assertEqual(self.buy().status_code,502);self.assertEqual(self.buy().status_code,502)
+  self.assertEqual(request_ids[0],request_ids[1])
+  result=self.buy();self.assertEqual(result.status_code,200,result.text)
+  self.assertEqual(result.json()['intent'],request_ids[0]);self.assertEqual(len(self.subs),2)
