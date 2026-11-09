@@ -42,7 +42,7 @@ def allowed(customer_id: str, module: str, snapshot: Mapping | None,
         or snapshot.get("state") != "ACTIVE"):
         return False
     plan = snapshot.get("plan_id")
-    if plan not in MODULES or module not in MODULES[plan]:
+    if not isinstance(plan, str) or plan not in MODULES or module not in MODULES[plan]:
         return False
     # The timestamp must originate from trusted server reconciliation. Stale
     # payment status fails closed rather than extending a lapsed subscription.
@@ -50,7 +50,7 @@ def allowed(customer_id: str, module: str, snapshot: Mapping | None,
     if not isinstance(checked, datetime) or checked.tzinfo is None:
         return False
     current = now or datetime.now(timezone.utc)
-    if current.tzinfo is None:
+    if not isinstance(current, datetime) or current.tzinfo is None:
         return False
     age = current - checked
     if not timedelta(0) <= age <= MAX_VERIFICATION_AGE:
