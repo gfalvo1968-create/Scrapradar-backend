@@ -38,3 +38,23 @@ class CustomerTests(unittest.TestCase):
  def test_auth_outage_fails_closed(self):
   with patch('customer_accounts.urlopen',side_effect=URLError('down')):
    self.assertEqual(self.client.get('/api/account',headers=self.headers).status_code,503)
+
+
+ def test_member_access_is_authenticated_and_fail_closed(self):
+  self.assertEqual(self.client.get('/api/member-access').status_code,401)
+  for identity in [ALICE,BOB]:
+   reply=self.get(self.user(identity),'/api/member-access')
+   self.assertEqual(reply.status_code,200)
+   self.assertEqual(reply.headers['cache-control'],'no-store')
+   self.assertEqual(reply.json()['modules'],{'scrap_radar':False,'board_sense':False})
+   self.assertFalse(reply.json()['paid_access_enabled'])
+  # Client claims and forged query fields cannot grant member access.
+  response=self.get(self.user(user_metadata={'plan':'family','paid':True}),'/api/member-access?plan=family&paid=true')
+  self.assertFalse(response.json()['paid_access_enabled'])
+
+ def test_existing_account_exposes_denied_module_access(self):
+  register_subscription(ALICE,'subx','family')
+  response=self.get(self.user())
+  self.assertEqual(response.status_code,200)
+  self.assertEqual(response.json()['module_access'],{'scrap_radar':False,'board_sense':False})
+  self.assertFalse(response.json()['paid_access_enabled'])
