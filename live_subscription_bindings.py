@@ -12,7 +12,7 @@ from database import _connect
 from membership_catalog import PLANS
 from paypal_live_evidence import SUBSCRIPTION_ID, PLAN_ID
 
-OPAQUE_ID = re.compile(r"[a-f0-9-]{36}\\Z")
+OPAQUE_ID = re.compile(r"[a-f0-9-]{36}\Z")
 
 
 def _uuid(value):
