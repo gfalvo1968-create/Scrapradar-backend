@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from database import _connect
 from membership_records import customer_subscriptions
+from entitlement_policy import allowed
 
 CONFIG = json.loads(Path(__file__).with_name('customer_auth_config.json').read_text())
 
@@ -42,6 +43,36 @@ def verified_customer(request: Request):
 router = APIRouter(prefix='/api', tags=['Customer account'])
 
 
+def _trusted_live_snapshot(customer_id):
+    """No live PayPal reconciler is connected yet. Never accept client claims.
+
+    Replace this adapter only after server-side canonical billing verification
+    and customer-plan-price binding have been implemented and tested.
+    """
+    return None
+
+
+def paid_modules(customer_id):
+    snapshot = _trusted_live_snapshot(customer_id)
+    return {
+        'scrap_radar': allowed(customer_id, 'scrap_radar', snapshot),
+        'board_sense': allowed(customer_id, 'board_sense', snapshot),
+    }
+
+
+@router.get('/member-access')
+def member_access(response: Response, customer: dict = Depends(verified_customer)):
+    """Read-only membership access decision; cannot set billing status."""
+    response.headers['Cache-Control'] = 'no-store'
+    modules = paid_modules(customer['id'])
+    return {
+        'modules': modules,
+        'paid_access_enabled': any(modules.values()),
+        'billing_verification': 'not_connected',
+        'notice': 'Paid memberships are not enabled yet.',
+    }
+
+
 @router.get('/account')
 def account(response: Response, customer: dict = Depends(verified_customer)):
     response.headers['Cache-Control'] = 'no-store'
@@ -61,6 +92,7 @@ def account(response: Response, customer: dict = Depends(verified_customer)):
         'subscriptions': [{k:r[k] for k in ('plan_id','amount_cents','currency','state','rate_retained')} for r in subscriptions],
         'checkout_enabled': False,
         'paid_access_enabled': False,
+        'module_access': paid_modules(customer['id']),
         'usage': {'limit_per_day':25, 'used_today':None, 'enforcement':'not_connected'},
         'notice':'Membership payments and paid board access are not enabled yet.',
     }
