@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 import live_paypal_reader as reader
-from tests.test_paypal_live_evidence import fixture
+from test_paypal_live_evidence import fixture
 
 
 class LiveReaderTests(unittest.TestCase):
