@@ -74,3 +74,30 @@ client-side return page, or a raw `state='ACTIVE'` test fixture.
 PayPal sandbox cancellation tests and real signed sandbox webhook deliveries
 have already been completed; the remaining work is production validation and
 server-enforced access.
+
+## Internal receiver contract (added in this draft, NOT MOUNTED)
+
+`internal_board_reservations.py` defines the previously missing receiving
+route `POST /api/internal/board/cases/reserve` with a strict
+`{"case_id":"<uuid>"}` request body. This router is **not imported into
+`main.py`** and is therefore unreachable on the deployed app. It requires:
+
+- Explicit internal feature switch plus a high-entropy `X-SRF-Board-Service-Key`
+  supplied by Board Sense (constant-time comparison).
+- A genuine **customer token independently checked** by the existing managed
+  Auth service using `verified_customer`, without trusting a caller-supplied
+  account UUID, plan, or price.
+- A **separate production payment verifier** that is currently intentionally
+  unimplemented and always raises **HTTP 503**. Even an internal test database
+  containing an ACTIVE subscription cannot defeat this security gate.
+- A trusted active plan in the membership ledger before any atomic reservation.
+
+Expected responses in *isolated mocked tests*: 200 and same case UUID/remaining
+quota if all trusted gates pass; 401 for missing customer identity; 403 for
+invalid server credential or inactive plan; 429 for daily exhaustion; 409 for
+duplicate/cross-account case; 503 for disabled service, payment verifier
+unavailability or database failure. No bearer tokens, credential values or
+payments are logged or returned.
+
+**Do not wire this router into production or Board Sense until production
+reconciliation exists and the staging integration is tested end to end.**
