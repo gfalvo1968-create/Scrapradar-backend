@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -60,14 +61,18 @@ class PaidBoardQuotaTests(unittest.TestCase):
         case_id = self.case()
         a = quota.reserve_paid_board_case(self.alice, case_id, now=self.at)
         b = quota.reserve_paid_board_case(self.alice, case_id, now=self.at)
-        self.assertTrue(a.allowed and b.allowed)
+        self.assertTrue(a.allowed)
+        self.assertFalse(b.allowed)
         self.assertEqual(a.reason, "reserved")
-        self.assertEqual(b.reason, "already_counted")
+        self.assertEqual(b.reason, "already_reserved")
         self.assertEqual(quota.paid_board_usage(self.alice, now=self.at).used_today, 1)
         self.assertEqual(quota.paid_board_usage(self.alice, now=self.at).remaining, 24)
         self.assertTrue(quota.finish_paid_board_case(self.alice, case_id))
         self.assertTrue(quota.finish_paid_board_case(self.alice, case_id))
         self.assertEqual(quota.paid_board_usage(self.alice, now=self.at).used_today, 1)
+        repeat_completed = quota.reserve_paid_board_case(self.alice, case_id, now=self.at)
+        self.assertFalse(repeat_completed.allowed)
+        self.assertEqual(repeat_completed.reason, "already_completed")
 
     def test_25_case_limit_and_utc_reset(self):
         self.activate(self.alice, "board_sense")
@@ -81,6 +86,40 @@ class PaidBoardQuotaTests(unittest.TestCase):
         tomorrow = self.at + timedelta(days=1)
         self.assertEqual(quota.paid_board_usage(self.alice, now=tomorrow).used_today, 0)
         self.assertTrue(quota.reserve_paid_board_case(self.alice, self.case(), now=tomorrow).allowed)
+
+    def test_cannot_reuse_yesterday_case_id_to_start_new_analysis(self):
+        self.activate(self.alice, "family")
+        case_id = self.case()
+        self.assertTrue(quota.reserve_paid_board_case(self.alice, case_id, now=self.at).allowed)
+        tomorrow = self.at + timedelta(days=1)
+        repeated = quota.reserve_paid_board_case(self.alice, case_id, now=tomorrow)
+        self.assertFalse(repeated.allowed)
+        self.assertEqual(repeated.reason, "case_previous_day")
+        self.assertEqual(quota.paid_board_usage(self.alice, now=tomorrow).used_today, 0)
+        self.assertTrue(quota.reserve_paid_board_case(self.alice, self.case(), now=tomorrow).allowed)
+
+    def test_atomic_quota_under_simultaneous_requests(self):
+        self.activate(self.alice, "board_sense")
+        case_ids = [self.case() for _ in range(36)]
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            claims = list(pool.map(lambda case_id: quota.reserve_paid_board_case(self.alice, case_id, now=self.at), case_ids))
+        self.assertEqual(sum(result.allowed for result in claims), 25)
+        self.assertEqual(quota.paid_board_usage(self.alice, now=self.at).used_today, 25)
+        self.assertEqual(sum(result.reason == "daily_limit_reached" for result in claims), 11)
+
+    def test_suspended_or_failed_payment_denies_new_analysis(self):
+        sub = self.activate(self.alice, "board_sense")
+        record_reconciled_state(sub, str(uuid4()), 2, "PAYMENT_FAILED")
+        self.assertFalse(quota.reserve_paid_board_case(self.alice, self.case(), now=self.at).allowed)
+        record_reconciled_state(sub, str(uuid4()), 3, "SUSPENDED")
+        self.assertFalse(quota.reserve_paid_board_case(self.alice, self.case(), now=self.at).allowed)
+
+    def test_reset_follows_utc_boundary_not_local_clock(self):
+        self.activate(self.alice, "family")
+        late = datetime(2026, 11, 22, 18, 55, tzinfo=timezone(timedelta(hours=-5)))
+        next_day = late + timedelta(minutes=10)
+        self.assertTrue(quota.reserve_paid_board_case(self.alice, self.case(), now=late).allowed)
+        self.assertEqual(quota.paid_board_usage(self.alice, now=next_day).used_today, 0)
 
     def test_release_on_trusted_failure_reclaims_one_credit_but_cannot_reuse_id(self):
         self.activate(self.alice, "family")
