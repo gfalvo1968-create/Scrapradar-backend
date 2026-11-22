@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - paid_board_quota.py
+      - internal_board_reservations.py
       - tests/test_paid_board_quota.py
+      - tests/test_internal_board_reservations.py
       - .github/workflows/paid-board-quota.yml
   workflow_dispatch:
 
@@ -27,4 +29,6 @@ jobs:
       - name: Run internal quota regression tests
         env:
           PYTHONPATH: .
-        run: python -m unittest discover -v -s tests -p 'test_paid_board_quota.py'
+        run: |
+          python -m unittest discover -v -s tests -p 'test_paid_board_quota.py'
+          python -m unittest discover -v -s tests -p 'test_internal_board_reservations.py'
