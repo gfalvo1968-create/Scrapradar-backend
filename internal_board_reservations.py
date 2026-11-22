@@ -25,7 +25,10 @@ SERVICE_KEY_HEADER = "x-srf-board-service-key"
 
 
 class CaseReservation(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    # UUIDs arrive over JSON as strings; strict=True would reject every valid
+    # wire-format UUID before our service/payment authorization can run.
+    # UUID parsing still rejects malformed identifiers; extra keys stay banned.
+    model_config = ConfigDict(extra="forbid")
     case_id: UUID
 
 
