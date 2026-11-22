@@ -45,3 +45,21 @@ PayPal simulator mock events cannot use postback signature verification. Test re
 - Connected Railway **HTTP + deployment logs** for 2026-11-22 show: `POST /api/paypal/pilot/checkout` at **16:44:22Z** HTTP **200**; `POST /api/paypal/pilot/webhook` at **16:44:38Z**, **16:55:27Z**, and **16:55:28Z** each HTTP **200**; authenticated `GET /api/account` at **16:55:10Z** 200 and `GET /api/paypal/pilot/intents/{intent}` at **16:55:11Z** 200. Railway service reports deployment **SUCCESS**, one replica and persistent volume at `/data`. The current sandbox-only webhook implementation makes PayPal `verify-webhook-signature` postback and rejects failures with 403; HTTP 200 therefore strongly supports acceptance of authentic signed sandbox events through this handler (or already-verified duplicate events).
 - **Limit of log proof:** HTTP logs do **not** identify webhook event IDs/types, the handler's `reconciled` versus `ignored` outcomes, or which events were duplicates. Independently inspect PayPal Developer **Sandbox > Event Logs > Webhook Events** after this new test, and, if permitted, authorized server-side `paypal_pilot_events` ledger rows. Compare canonical subscription state with event resource identity; inspect retries/idempotency. Do not equate three webhook HTTP 200 responses to three new charges, three unique events or granted paid access.
 - **Next owner action:** Refresh PayPal Developer Sandbox Webhook Events, with 2026-11-22 in the date filter; show event list and one item's delivery detail (no client secrets, real funding data or private credentials). Do not create another subscription or click Resend until identifying event ID/type and latest delivery status. No production paid access was granted.
+
+## November 22, 2026, 11:55 AM Eastern: real Family sandbox acceptance checkpoint
+
+**Observed owner iPad evidence:** `sandbox_checkout.html` owner-only Family plan displayed **$44.95/month** and redirected to `sandbox.paypal.com`. PayPal's subscriber approval screen showed **Scrap Radar Family TEST**, **$44.95 every month**, start **Nov 22, 2026**. Owner completed the sandbox approval. The returned site showed `family: $44.95 USD/month • PayPal state: ACTIVE • PayPal recorded the test payment • Paid app access remains off.` This status comes from authenticated server-side PayPal reconciliation, not just a return URL.
+
+**Observed Railway HTTP logs for service `Scrapradar-backend`:**
+
+| UTC | Route | HTTP status |
+| --- | --- | --- |
+| 2026-11-22 16:44:22 | POST /api/paypal/pilot/checkout | **200** |
+| 2026-11-22 16:44:38 | POST /api/paypal/pilot/webhook | **200** |
+| 2026-11-22 16:55:11 | GET /api/paypal/pilot/intents/{intent} | **200** |
+| 2026-11-22 16:55:27 | POST /api/paypal/pilot/webhook | **200** |
+| 2026-11-22 16:55:28 | POST /api/paypal/pilot/webhook | **200** |
+
+The deployed webhook path, as currently written, verifies PayPal's `/v1/notifications/verify-webhook-signature` response is `SUCCESS` before returning HTTP 200 and committing a pilot event record (or marking an exact duplicate). These observed 200s are strong evidence of successful signed provider deliveries, not merely a mock unit test. **Still unverified:** exact PayPal event IDs/types or dashboard delivery statuses, authorized database-ledger row readback and duplicate resend outcome. Do not claim full webhook lifecycle acceptance until those are checked. No live checkout or entitlement was enabled.
+
+**Next:** PayPal Developer → Event Logs → Webhook Events (Sandbox) → set Nov 22 date and Search; inspect actual event types and statuses on this app, matching 11:44 and 11:55 ET; select one actual existing event and perform a single controlled **Resend** while monitoring HTTP outcome. An event-list screenshot should hide any unrelated account/security info. Verify same event ID is marked duplicate in pilot ledger without granting access. No need to create or approve another sandbox subscription.
