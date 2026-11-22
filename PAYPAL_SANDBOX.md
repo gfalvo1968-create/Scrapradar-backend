@@ -77,3 +77,14 @@ Owner's PayPal **Sandbox → Webhook Events** screenshot displays three distinct
 The two 11:55 events have not yet been matched individually to their corresponding Railway request because the generic proxy logs omit the PayPal event ID. Do not claim individual ordering. All three correspond in time and type to distinct delivery callbacks; **they are not evidence of duplicate-event replay**. The backend implementation gates an accepted 200 response on PayPal signature postback `SUCCESS` and successful local pilot transaction; this is strong evidence of signed real sandbox event handling, not yet a verified per-row ledger audit. No production entitlement was granted.
 
 **Next:** Tap the **Billing subscription activated** event's blue ID in the PayPal Developer event list, inspect delivery attempt status and target (don't publish tokens or full financial details), then perform a **single** authorized resend of this **same** event if a delivered attempt is visible. Compare resulting Railway webhook 200 against event ID with provider and read the pilot ledger through secure server tooling to confirm duplicate classification (no new subscription or access). If secure ledger inspection is unavailable, note duplicate verification as partial rather than claiming it passed. Do not create another sandbox checkout merely to test duplicates.
+
+## November 22, 12:22 PM Eastern — PayPal delivery attempt confirmed
+
+Owner's PayPal Developer **Sandbox → Webhook Events → Billing subscription activated** detail and **Attempt history** screenshots show:
+
+- Event type: `BILLING.SUBSCRIPTION.ACTIVATED` and event status **SUCCESS**.
+- First delivery attempt: **11:55:27 AM ET on November 22, 2026**, result **DELIVERED**.
+- The backend Railway proxy separately logged a successful `POST /api/paypal/pilot/webhook`, **HTTP 200**, at **2026-11-22T16:55:27.520Z**.
+- The event's PayPal event ID is accessible in the PayPal developer dashboard. Avoid copying event payload fields such as sandbox payer identity to project documentation; no secret credentials or payer details were retained here.
+
+**Validated:** exact timestamp correlation of a successful *real*, signed sandbox activation notification and delivered callback, plus independently verified ACTIVE subscription/test payment. **Still pending:** explicit resend of the **same existing event** and duplicate/idempotency readback. Source code `process_webhook` deduplicates by event ID and SHA256 digest before reconciliation; test should confirm behavior in the live sandbox and that no production entitlement is generated.
