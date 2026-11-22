@@ -63,3 +63,17 @@ PayPal simulator mock events cannot use postback signature verification. Test re
 The deployed webhook path, as currently written, verifies PayPal's `/v1/notifications/verify-webhook-signature` response is `SUCCESS` before returning HTTP 200 and committing a pilot event record (or marking an exact duplicate). These observed 200s are strong evidence of successful signed provider deliveries, not merely a mock unit test. **Still unverified:** exact PayPal event IDs/types or dashboard delivery statuses, authorized database-ledger row readback and duplicate resend outcome. Do not claim full webhook lifecycle acceptance until those are checked. No live checkout or entitlement was enabled.
 
 **Next:** PayPal Developer → Event Logs → Webhook Events (Sandbox) → set Nov 22 date and Search; inspect actual event types and statuses on this app, matching 11:44 and 11:55 ET; select one actual existing event and perform a single controlled **Resend** while monitoring HTTP outcome. An event-list screenshot should hide any unrelated account/security info. Verify same event ID is marked duplicate in pilot ledger without granting access. No need to create or approve another sandbox subscription.
+
+## November 22, 12:09 PM Eastern: PayPal provider event-list corroboration
+
+Owner's PayPal **Sandbox → Webhook Events** screenshot displays three distinct events from the verified Family sandbox test on November 22, 2026:
+
+| Local time (ET) | PayPal event | Matching Railway POST |
+| --- | --- | --- |
+| 11:44 AM | Billing subscription created | 16:44:38 UTC, **HTTP 200** |
+| 11:55 AM | Payment sale completed | 16:55:27 or 16:55:28 UTC, **HTTP 200** |
+| 11:55 AM | Billing subscription activated | 16:55:27 or 16:55:28 UTC, **HTTP 200** |
+
+The two 11:55 events have not yet been matched individually to their corresponding Railway request because the generic proxy logs omit the PayPal event ID. Do not claim individual ordering. All three correspond in time and type to distinct delivery callbacks; **they are not evidence of duplicate-event replay**. The backend implementation gates an accepted 200 response on PayPal signature postback `SUCCESS` and successful local pilot transaction; this is strong evidence of signed real sandbox event handling, not yet a verified per-row ledger audit. No production entitlement was granted.
+
+**Next:** Tap the **Billing subscription activated** event's blue ID in the PayPal Developer event list, inspect delivery attempt status and target (don't publish tokens or full financial details), then perform a **single** authorized resend of this **same** event if a delivered attempt is visible. Compare resulting Railway webhook 200 against event ID with provider and read the pilot ledger through secure server tooling to confirm duplicate classification (no new subscription or access). If secure ledger inspection is unavailable, note duplicate verification as partial rather than claiming it passed. Do not create another sandbox checkout merely to test duplicates.
