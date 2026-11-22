@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install only required API dependency
-        run: python -m pip install 'fastapi==0.142.2'
+        run: python -m pip install 'fastapi==0.142.2' 'httpx2==2.16.2'
       - name: Run internal quota regression tests
         env:
           PYTHONPATH: .
