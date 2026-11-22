@@ -14,7 +14,10 @@ separate from production subscriptions and MUST NOT confer real entitlements.
   Family plan promises future software.
 - Atomically reserves one slot per **physical board case** (not per photo).
   Repeated requests using the *same trusted, server-generated case UUID* are
-  idempotent. A 2–6-photo analysis of one physical board must keep the same ID.
+  idempotently rejected for repeat processing: a duplicate request must
+  retrieve/poll the original case result rather than run a second free scan.
+  A case UUID from yesterday cannot be reused today. A 2–6-photo analysis
+  of one physical board must keep the same ID.
 - Enforces **25 board cases per customer per UTC day** in a persistent SQLite
   transaction, tracked by authenticated customer UUID.
 - Finalizes successful cases and permits server-controlled release of *failed*
@@ -24,8 +27,9 @@ separate from production subscriptions and MUST NOT confer real entitlements.
 - Checks that an existing case ID belongs to the same authenticated customer.
   Ignores arbitrary user metadata and browser assertions about payment status.
 - Includes offline regression tests for plan coverage, denied unverified access,
-  cross-customer isolation, duplicate requests, UTC reset, cancellation, and
-  failure-credit idempotency.
+  cross-customer isolation, duplicate analysis prevention, old case reuse,
+  36 simultaneous quota requests (exactly 25 accepted), UTC reset,
+  cancellation, failed-payment denial and failure-credit idempotency.
 
 ## Critical prerequisites before connecting to public Board Sense
 
